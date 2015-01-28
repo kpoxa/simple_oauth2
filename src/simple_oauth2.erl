@@ -3,6 +3,7 @@
 
 -export([
         dispatcher/3,
+        dispatch_req/5,
         predefined_networks/0, customize_networks/2,
         gather_url_get/1
     ]).
@@ -127,52 +128,53 @@ parse_gets(GetString) ->
 dispatcher(Request, LocalUrlPrefix, Networks) -> 
     [Path | PreGets] = binary:split(Request, <<"?">>),
     [NetName, Action] = binary:split(Path, <<"/">>),
-    Gets = case PreGets of
+    RqParams = case PreGets of
         [] -> [];
         [QString] -> parse_gets(QString)
     end,
     Network = get_value(NetName, Networks),
-    case {Network, Action} of
-        {undefined, _} -> {error, unknown_network, "Unknown or not customized social network"};
-        {_, <<"login">>} ->
-            {redirect,
-                {get_value(authorize_uri, Network), [
-                    {client_id, get_value(client_id, Network)},
-                    {redirect_uri, iolist_to_binary([LocalUrlPrefix,
-                                get_value(callback_uri, Network)])},
-                    {response_type, get_value(<<"response_type">>, Gets, <<"code">>)},
-                    {scope, get_value(scope, Network)},
-                    {state, get_value(<<"state">>, Gets, <<>>)}
-                ]}
-            };
-        {_, <<"callback">>} ->
-            case get_value(<<"error">>, Gets, undefined) of
-                undefined -> case get_value(<<"code">>, Gets, undefined) of
-                        undefined -> case get_value(<<"access_token">>, Gets, undefined) of
-                                undefined -> {send_html, <<
-                                        "<!--script>",
-                                        "window.location.replace(window.location.href.replace('#','?'))",
-                                        "</script-->"
-                                    >>};
-                                Token -> {ok, get_profile_info(Network, [
-                                        {network, NetName},
-                                        {access_token, Token},
-                                        {token_type, get_value(<<"token_type">>, Gets,
-                                                <<"bearer">>)}
-                                    ])}
-                            end;
-                        Code ->
-                            post({NetName, Network}, get_value(token_uri, Network), [
-                                {code, Code},
-                                {client_id, get_value(client_id, Network)},
-                                {client_secret, get_value(client_secret, Network)},
-                                {redirect_uri, iolist_to_binary([LocalUrlPrefix,
-                                            get_value(callback_uri, Network)])},
-                                {grant_type, <<"authorization_code">>}
-                            ])
+    dispatch_req(NetName, Network, Action, LocalUrlPrefix, RqParams).
+
+dispatch_req(_, undefined, _, _, _) ->
+    {error, unknown_network, "Unknown or not customized social network"};
+dispatch_req(_NetName, Network, <<"login">>, LocalUrlPrefix, RqParams) ->
+    {redirect,
+        {get_value(authorize_uri, Network), [
+            {client_id, get_value(client_id, Network)},
+            {redirect_uri, iolist_to_binary([LocalUrlPrefix,
+                        get_value(callback_uri, Network)])},
+            {response_type, get_value(<<"response_type">>, RqParams, <<"code">>)},
+            {scope, get_value(scope, Network)},
+            {state, get_value(<<"state">>, RqParams, <<>>)}
+        ]}
+    };
+dispatch_req(NetName, NetworkDef, <<"callback">>, LocalUrlPrefix, RqParams) ->
+    case get_value(<<"error">>, RqParams, undefined) of
+        undefined -> case get_value(<<"code">>, RqParams, undefined) of
+                undefined -> case get_value(<<"access_token">>, RqParams, undefined) of
+                        undefined -> {send_html, <<
+                                "<!--script>",
+                                "window.location.replace(window.location.href.replace('#','?'))",
+                                "</script-->"
+                            >>};
+                        Token -> {ok, get_profile_info(NetworkDef, [
+                                {network, NetName},
+                                {access_token, Token},
+                                {token_type, get_value(<<"token_type">>, RqParams,
+                                        <<"bearer">>)}
+                            ])}
                     end;
-                Error -> {error, auth_error, Error}
-            end
+                Code ->
+                    post({NetName, NetworkDef}, get_value(token_uri, NetworkDef), [
+                        {code, Code},
+                        {client_id, get_value(client_id, NetworkDef)},
+                        {client_secret, get_value(client_secret, NetworkDef)},
+                        {redirect_uri, iolist_to_binary([LocalUrlPrefix,
+                                    get_value(callback_uri, NetworkDef)])},
+                        {grant_type, <<"authorization_code">>}
+                    ])
+            end;
+        Error -> {error, auth_error, Error}
     end.
 
 urlencoded_parse(Data) ->
