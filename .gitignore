@@ -1,3 +1,10 @@
 deps/
 ebin/
 *.beam
+.eunit
+*.sublime-workspace
+*.plt
+erl_crash.dump
+*~
+*#
+.#*
