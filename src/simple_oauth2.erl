@@ -130,9 +130,9 @@ http_request_json(Method, Request, OnSuccess) ->
 
 handle_response({ok, {200, JSON}}, OnSuccess) -> 
     OnSuccess(JSON);
-handle_response({ok, {Code, _Ret}}, _) -> 
-    {error, post_error, 
-        lists:flatten("Post returned non-200 code: " ++ integer_to_list(Code) ++ _Ret)};
+handle_response({ok, {Code, Ret}}, _) -> 
+    {error, post_error, lists:flatten("Post returned non-200 code: " ++
+            integer_to_list(Code) ++ " " ++ binary_to_list(Ret))};
 handle_response({error, Reason}, _) -> 
     {error, http_request_error, Reason}.
     
