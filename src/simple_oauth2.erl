@@ -1,7 +1,7 @@
 -module(simple_oauth2).
 -author('Igor Milyakov <virtan@virtan.com>').
 
--export([dispatcher/3, dispatch_action/2,  gather_url_get/1, request/4]).
+-export([dispatcher/3, dispatch_action/2,  compose_get_url/1, request/4, join_query_args/1]).
 -define(REDIRECT_SCRIPT, <<"<!--script>window.location.replace(window.location.href.replace('#','?'))</script-->">>).
 -import(proplists, [get_value/2, get_value/3]).
 
@@ -45,7 +45,7 @@ check_error_and_dispatch(Error, _) ->
 dispatch(undefined, Req) ->
     dispatch_access_token(get_access_token(Req), Req);
 dispatch(Code, Req) ->
-    post({Req#req.network_name, Req#req.network_settings}, get_token_uri(Req), [
+    post(Req, get_token_uri(Req), [
         {code, Code},
         get_client_id(Req),
         get_client_secret(Req),
@@ -72,6 +72,15 @@ get_redirect_params(Req) ->
      get_response_type(Req),
      get_scope(Req),
      get_state(Req)].
+
+get_userinfo_composer(Network) ->
+    get_value(userinfo_composer, Network).
+
+get_userinfo_params(Network) ->
+    get_value(userinfo_params, Network).
+
+get_userinfo_uri(Network) ->
+    get_value(userinfo_uri, Network).
 
 get_access_token(#req { req_params = RqParams } ) ->
     get_value(<<"access_token">>, RqParams, undefined).
@@ -148,51 +157,84 @@ post(Req, Url, Params) ->
         fun(JSON) -> case json_parse(JSON) of
                 {error, _, _} = Error -> Error;
                 Hash -> case get_value(<<"error">>, Hash, undefined) of
-                        undefined -> {ok, get_profile_info(Req, [
-                            {network, Req#req.network_name },
-                            {access_token, get_value(<<"access_token">>, Hash)},
-                            {token_type, get_value(<<"token_type">>, Hash, <<"bearer">>)}
-                        ])};
-                        Error -> {error, unsuccessful, Error}
+                            undefined -> {ok, get_profile_info(Req, create_auth_info(Req, Hash))};
+                            Error -> {error, unsuccessful, Error}
                     end
             end
         end).
 
+create_auth_info(Req, Hash) ->
+    [{network, Req#req.network_name },
+     {access_token, get_value(<<"access_token">>, Hash)},
+     {token_type, get_value(<<"token_type">>, Hash, <<"bearer">>)}].
+
 url_encode(Data) -> url_encode(Data,"").
 url_encode([],Acc) -> list_to_binary(Acc);
 url_encode([{Key,Value}|R],"") ->
-    url_encode(R, edoc_lib:escape_uri(atom_to_list(Key)) ++ "=" ++
-        edoc_lib:escape_uri(binary_to_list(Value)));
+url_encode(R, simple_oauth2_utils:encode(atom_to_list(Key)) ++ "=" ++
+ simple_oauth2_utils:encode(binary_to_list(Value)));
 url_encode([{Key,Value}|R],Acc) ->
-    url_encode(R, Acc ++ "&" ++ edoc_lib:escape_uri(atom_to_list(Key)) ++ "=" ++
-        edoc_lib:escape_uri(binary_to_list(Value))).
+    url_encode(R, Acc ++ "&" ++ simple_oauth2_utils:encode(atom_to_list(Key)) ++ "=" ++
+        simple_oauth2_utils:encode(binary_to_list(Value))).
 
-gather_url_get({Path, QueryString}) ->
-    iolist_to_binary([Path,
-        case lists:flatten([
-            ["&", edoc_lib:escape_uri(atom_to_list(K)), "=", edoc_lib:escape_uri(binary_to_list(V))]
-            || {K, V} <- QueryString
-        ]) of [] -> []; [_ | QS] -> [$? | QS] end]).
+
+
+join_query_args(QueryArgs) ->
+    Pairs = [[simple_oauth2_utils:encode(Key), "=", simple_oauth2_utils:encode(Value)] || {Key, Value} <- QueryArgs],
+    ["?" | string:join(Pairs, "&")].
 
 get_profile_info(#req { network_settings = Network}, Auth) ->
-    http_request_json(get, {binary_to_list(gather_url_get(
-                    {get_value(userinfo_uri, Network),
-                        case get_value(userinfo_composer, Network) of
-                            undefined -> lists:map(fun({K, access_token}) ->
-                                            {K, get_value(access_token, Auth)};
-                                        (P) -> P end, get_value(userinfo_params, Network));
-                            UIComp -> UIComp(Auth, Network)
-                        end})), []},
-            fun(JSON) -> case json_parse(JSON) of
-                {error, _, _} = Error -> Error;
-                Profile -> Profile1 = case get_value(field_pre, Network) of
-                        undefined -> Profile; F -> F(Profile) end,
-                    [{Field, case {get_value(field_fix, Network), fun(Na, Pro) ->
-                                  get_value(list_to_binary(atom_to_list(Na)), Pro) end} of
-                                {undefined, DefF} -> DefF(Name, Profile1);
-                                {Func, DefF} -> Func(Name, Profile1, DefF)
-                            end}
-                        || {Field, Name} <- lists:zip([id, email, name, picture, gender, locale],
-                        get_value(field_names, Network))] ++ [{raw, Profile} | Auth]
-            end
-        end).
+    Url = compose_get_profile_url(Network, Auth),
+    Request = {Url, []},
+    http_request_json(get, Request, fun(JSON) -> prepare_parsed_profile(json_parse(JSON), Network, Auth) end).
+
+get_patch_profile_callback(Network) ->
+    get_value(field_pre, Network).
+
+get_field_names(Network) ->
+    lists:zip([id, email, name, picture, gender, locale], get_value(field_names, Network)).
+
+fix_profile(Profile, undefined) -> Profile;
+fix_profile(Profile, Callback) -> Callback(Profile).
+
+get_field_from_profile(Name, Profile) when is_atom(Name) ->
+    get_value(list_to_binary(atom_to_list(Name)), Profile).
+
+get_field_fix(Network) ->
+    get_value(field_fix, Network).
+
+fix_profile_field(Name, Profile, Network) ->
+    fix_field(get_field_fix(Network), Name, Profile).
+
+fix_field(undefined, Name, Profile) -> 
+    get_field_from_profile(Name, Profile);
+fix_field(Func, Name, Profile) when is_function(Func) -> 
+    Func(Name, Profile, fun(N, P) -> get_field_from_profile(N, P) end).
+
+get_profile_fields(Profile, Network) ->
+    [{Field, fix_profile_field(Name, Profile, Network)} || {Field, Name} <- get_field_names(Network)].
+
+prepare_parsed_profile({error, _, _} = Error, _, _) -> 
+    Error;
+prepare_parsed_profile(Profile, Network, Auth) -> 
+    FixedProfile = fix_profile(Profile, get_patch_profile_callback(Network)),
+    ProfileFields = get_profile_fields(FixedProfile, Network), 
+    ProfileFields ++ [{raw, Profile} | Auth].
+
+compose_get_profile_url(Network, Auth) ->
+    Path = get_userinfo_uri(Network),
+    Args = compose_get_profile_query_args(get_userinfo_composer(Network), Auth, Network),
+    compose_get_url({Path, Args}).
+
+compose_get_url({Path, QueryString}) ->
+    QueryArgs = join_query_args(QueryString),
+    binary_to_list(iolist_to_binary([Path | QueryArgs])).
+
+compose_get_profile_query_args(undefined, Auth, Network) ->
+    Params = get_userinfo_params(Network),
+    lists:map(fun({K, access_token}) -> 
+                        {K, get_value(access_token, Auth)};
+                  (P) -> P 
+              end, Params);
+compose_get_profile_query_args(Callback, Auth, Network) ->
+    Callback(Auth, Network).
