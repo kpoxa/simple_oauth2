@@ -13,7 +13,7 @@ parse_query_parameters(QueryString) ->
         {K, V} <- httpd:parse_query(binary_to_list(QueryString))].
 
 dispatcher(Request, LocalUrlPrefix, Networks) -> 
-    [Path | Query] = binary:split(Request, <<"?">>),
+    [Path | [Query]] = binary:split(Request, <<"?">>),
     [NetName, Action] = binary:split(Path, <<"/">>),
     RqParams = parse_query_parameters(Query),
     Network = get_value(NetName, Networks),
@@ -22,7 +22,7 @@ dispatcher(Request, LocalUrlPrefix, Networks) ->
 
 request(NetworkName, NetworkSettings, Uri, LocalUrlPrefix) ->
     Network = get_value(NetworkName, NetworkSettings),
-    [_Path | Query ] = binary:split(Uri, <<"?">>),
+    [_Path | [Query] ] = binary:split(Uri, <<"?">>),
     RqParams = parse_query_parameters(Query),
     #req{ network_name = NetworkName, network_settings = Network, url_prefix = LocalUrlPrefix, req_params = RqParams}.
 
@@ -126,14 +126,21 @@ json_parse(JSON) ->
     end.
 
 http_request_json(Method, Request, OnSuccess) ->
-    case httpc:request(Method, Request,
+    handle_response(do_request(Method, Request), OnSuccess).
+
+handle_response({ok, {200, JSON}}, OnSuccess) -> 
+    OnSuccess(JSON);
+handle_response({ok, {Code, _Ret}}, _) -> 
+    {error, post_error, 
+        lists:flatten("Post returned non-200 code: " ++ integer_to_list(Code) ++ _Ret)};
+handle_response({error, Reason}, _) -> 
+    {error, http_request_error, Reason}.
+    
+
+do_request(Method, Request) ->
+    httpc:request(Method, Request,
             [{timeout, 10000}, {connect_timeout, 20000}, {autoredirect, true}],
-            [{body_format, binary}, {full_result, false}]) of
-        {ok, {200, JSON}} -> OnSuccess(JSON);
-        {ok, {Code, _Ret}} -> {error, post_error, lists:flatten("Post returned non-200 code: " ++
-                    integer_to_list(Code) ++ _Ret)};
-        {error, Reason} -> {error, http_request_error, Reason}
-    end.
+            [{body_format, binary}, {full_result, false}]).
 
 post(Req, Url, Params) ->
     http_request_json(post, {binary_to_list(Url), [], "application/x-www-form-urlencoded",
