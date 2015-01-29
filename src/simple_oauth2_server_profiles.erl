@@ -8,7 +8,7 @@ configured_networks() ->
 
 config_network({NetName, Settings}) when is_list(Settings) ->
     Predefined = erlang:apply(simple_oauth2_server_profiles, NetName, []),
-    merge(Predefined, Settings). 
+    {NetName, merge(Predefined, Settings)}. 
 
 merge(KeyListBase, []) -> KeyListBase;
 merge(KeyListBase, [H = {Key, _} | T]) ->

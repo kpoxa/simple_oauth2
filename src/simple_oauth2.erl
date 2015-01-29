@@ -1,7 +1,7 @@
 -module(simple_oauth2).
 -author('Igor Milyakov <virtan@virtan.com>').
 
--export([dispatcher/3, dispatch_action/2,  gather_url_get/1]).
+-export([dispatcher/3, dispatch_action/2,  gather_url_get/1, request/4]).
 -define(REDIRECT_SCRIPT, <<"<!--script>window.location.replace(window.location.href.replace('#','?'))</script-->">>).
 -import(proplists, [get_value/2, get_value/3]).
 
@@ -13,15 +13,19 @@ parse_query_parameters(QueryString) ->
         {K, V} <- httpd:parse_query(binary_to_list(QueryString))].
 
 dispatcher(Request, LocalUrlPrefix, Networks) -> 
-    [Path | PreGets] = binary:split(Request, <<"?">>),
+    [Path | Query] = binary:split(Request, <<"?">>),
     [NetName, Action] = binary:split(Path, <<"/">>),
-    RqParams = case PreGets of
-        [] -> [];
-        [QString] -> parse_query_parameters(QString)
-    end,
+    RqParams = parse_query_parameters(Query),
     Network = get_value(NetName, Networks),
     Req = #req{ network_name = NetName, network_settings = Network, url_prefix = LocalUrlPrefix, req_params = RqParams}, 
     dispatch_action(Action, Req).
+
+request(NetworkName, NetworkSettings, Uri, LocalUrlPrefix) ->
+    Network = get_value(NetworkName, NetworkSettings),
+    [_Path | Query ] = binary:split(Uri, <<"?">>),
+    RqParams = parse_query_parameters(Query),
+    #req{ network_name = NetworkName, network_settings = Network, url_prefix = LocalUrlPrefix, req_params = RqParams}.
+
 
 dispatch_action(undefined, _) ->
     {error, unknown_network, "Unknown or not customized social network"};
