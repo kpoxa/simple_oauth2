@@ -12,7 +12,7 @@ config_network({NetName, Settings}) when is_list(Settings) ->
 
 merge(KeyListBase, []) -> KeyListBase;
 merge(KeyListBase, [H = {Key, _} | T]) ->
-    merge(lists:keyreplace(1, Key, KeyListBase, H), T).
+    merge(lists:keyreplace(Key, 1, KeyListBase, H), T).
 
 -type userinfo_field() :: { atom(), binary() }.
 -type userinfo() :: [ userinfo_field() ].
